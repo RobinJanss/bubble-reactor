@@ -1,33 +1,32 @@
-// input.js — Touch + Mouse Input Handler
-// Verhindert außerdem dass das Spiel die Poki-Seite scrollt.
+// input.js — Touch + Mouse Input + Mouse Position Tracking
 
 const Input = (() => {
   let _enabled = true;
-  let _listeners = [];  // Registrierte Tap-Handler
+  let _tapListeners = [];
+  let _moveListeners = [];
+  let _cachedRect = null;
 
-  // Einen Tap/Click-Handler registrieren
-  function onTap(fn) {
-    _listeners.push(fn);
-  }
+  function onTap(fn)  { _tapListeners.push(fn); }
+  function onMove(fn) { _moveListeners.push(fn); }
 
-  // Alle Handler entfernen (z.B. beim State-Wechsel)
   function clearListeners() {
-    _listeners = [];
+    _tapListeners = [];
+    _moveListeners = [];
   }
 
   function disable() { _enabled = false; }
   function enable()  { _enabled = true; }
 
-  // Interner Dispatcher — ruft alle registrierten Handler auf
-  function _dispatch(x, y) {
+  function _dispatchTap(x, y) {
     if (!_enabled) return;
-    _listeners.forEach(fn => fn(x, y));
+    _tapListeners.forEach(fn => fn(x, y));
+  }
+
+  function _dispatchMove(x, y) {
+    _moveListeners.forEach(fn => fn(x, y));
   }
 
   // ── Page-Scroll Prevention ─────────────────────────────────────────────
-  // Poki bettet das Spiel in eine scrollbare Seite ein.
-  // Wir verhindern, dass Tastatur/Mausrad/Touch die Seite scrollen.
-
   function _shouldBlockKey(e) {
     const tag = (e.target?.tagName || '').toLowerCase();
     const isTyping = tag === 'input' || tag === 'textarea' || e.target?.isContentEditable;
@@ -43,30 +42,49 @@ const Input = (() => {
     e.preventDefault();
   }, { passive: false });
 
-  // ── Mouse Input ────────────────────────────────────────────────────────
-  window.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return; // Nur linke Maustaste
+  // ── Mouse Move ─────────────────────────────────────────────────────────
+  window.addEventListener('mousemove', (e) => {
     const rect = _getCanvasRect();
     if (!rect) return;
     const x = (e.clientX - rect.left) / rect.width;
     const y = (e.clientY - rect.top) / rect.height;
-    _dispatch(x, y);
+    _dispatchMove(x, y);
   });
 
-  // ── Touch Input ────────────────────────────────────────────────────────
-  window.addEventListener('touchstart', (e) => {
-    e.preventDefault(); // Verhindert Ghost-Clicks und Page-Scroll
+  // ── Mouse Click ────────────────────────────────────────────────────────
+  window.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const rect = _getCanvasRect();
+    if (!rect) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    _dispatchTap(x, y);
+  });
+
+  // ── Touch ──────────────────────────────────────────────────────────────
+  window.addEventListener('touchmove', (e) => {
+    e.preventDefault();
     const touch = e.touches[0];
     if (!touch) return;
     const rect = _getCanvasRect();
     if (!rect) return;
     const x = (touch.clientX - rect.left) / rect.width;
     const y = (touch.clientY - rect.top) / rect.height;
-    _dispatch(x, y);
+    _dispatchMove(x, y);
   }, { passive: false });
 
-  // Canvas-Rect cachen (wird bei Resize aktualisiert)
-  let _cachedRect = null;
+  window.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!touch) return;
+    const rect = _getCanvasRect();
+    if (!rect) return;
+    const x = (touch.clientX - rect.left) / rect.width;
+    const y = (touch.clientY - rect.top) / rect.height;
+    _dispatchMove(x, y);
+    _dispatchTap(x, y);
+  }, { passive: false });
+
   function _getCanvasRect() {
     if (!_cachedRect) {
       const canvas = document.getElementById('game-canvas');
@@ -75,10 +93,7 @@ const Input = (() => {
     return _cachedRect;
   }
 
-  // Bei Resize den Cache leeren
-  window.addEventListener('resize', () => {
-    _cachedRect = null;
-  });
+  window.addEventListener('resize', () => { _cachedRect = null; });
 
-  return { onTap, clearListeners, disable, enable };
+  return { onTap, onMove, clearListeners, disable, enable };
 })();

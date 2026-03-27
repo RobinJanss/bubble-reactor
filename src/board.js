@@ -1,33 +1,29 @@
 // board.js — Board-Generierung mit Seed
-// Platziert Bubbles ohne Überlappung, reproduzierbar per Seed.
 
 const Board = (() => {
 
-  // Anzahl Bubbles je nach Board-Nummer (steigt leicht an)
   function getBubbleCount(boardIndex) {
-    return Utils.clamp(12 + boardIndex * 2, 12, 28);
+    return Utils.clamp(28 + boardIndex * 3, 28, 45);
   }
 
-  // Versucht eine Bubble ohne Überlappung zu platzieren
   function tryPlace(rng, existing, canvasW, canvasH, radius) {
-    const padding = radius + 10;
-    const maxAttempts = 50;
+    const padding = radius + 6;
+    const maxAttempts = 120;
 
     for (let i = 0; i < maxAttempts; i++) {
       const x = padding + rng() * (canvasW - padding * 2);
-      const y = padding + canvasH * 0.12 + rng() * (canvasH * 0.78 - padding);
+      const y = padding + canvasH * 0.06 + rng() * (canvasH * 0.86 - padding);
 
-      // Überlappungscheck
+      // Enger gepackt — nur 2px Abstand zwischen Bubbles
       const overlaps = existing.some(b => {
-        return Utils.distance(x, y, b.x, b.y) < b.radius + radius + 8;
+        return Utils.distance(x, y, b.x, b.y) < b.radius + radius + 2;
       });
 
       if (!overlaps) return { x, y };
     }
-    return null; // Kein Platz gefunden
+    return null;
   }
 
-  // Board generieren
   function generate(seed, boardIndex, canvasW, canvasH) {
     const rng = Utils.createRNG(seed + boardIndex * 1000);
     const bubbles = [];
@@ -44,7 +40,6 @@ const Board = (() => {
     return bubbles;
   }
 
-  // Daily Board — fixer Seed für heute
   function generateDaily(canvasW, canvasH) {
     return generate(Utils.getDailySeed(), 0, canvasW, canvasH);
   }
