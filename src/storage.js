@@ -32,10 +32,32 @@ const Storage = (() => {
   const KEYS = {
     HIGH_SCORE:   'br_highscore',
     BEST_CHAIN:   'br_bestchain',
-    DAILY_PLAYED: 'br_daily_played',
-    DAILY_SCORE:  'br_daily_score',
-    TOTAL_STARS:  'br_total_stars',   // ← neu
+    TOTAL_STARS:  'br_total_stars',
+    DAILY_PREFIX: 'br_daily_',
+    // Upgrade-Keys: 'br_upg_' + id  → in upgrades.js genutzt
   };
 
-  return { get, set, remove, KEYS };
+  // ── Daily Board Tracking ───────────────────────────────────────────────
+  function _todayKey() {
+    const d   = new Date();
+    const y   = d.getUTCFullYear();
+    const m   = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return KEYS.DAILY_PREFIX + y + m + day;
+  }
+
+  function hasDailyPlayedToday() {
+    return get(_todayKey()) === true;
+  }
+
+  function markDailyPlayedToday(score) {
+    set(_todayKey(), true);
+    if (typeof score === 'number') set(_todayKey() + '_score', score);
+  }
+
+  function getDailyScore() {
+    return get(_todayKey() + '_score');
+  }
+
+  return { get, set, remove, KEYS, hasDailyPlayedToday, markDailyPlayedToday, getDailyScore };
 })();

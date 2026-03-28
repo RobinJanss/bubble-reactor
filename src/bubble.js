@@ -8,14 +8,6 @@ const BubbleType = {
   MEGA:   { name: 'MEGA',   color: '#FF4757', glowColor: '#CC1122', baseRadius: 48, explosionMult: 5.0, points: 250 },
 };
 
-const BubbleDistribution = [
-  { type: BubbleType.MICRO,  weight: 30 },
-  { type: BubbleType.SMALL,  weight: 35 },
-  { type: BubbleType.MEDIUM, weight: 20 },
-  { type: BubbleType.LARGE,  weight: 12 },
-  { type: BubbleType.MEGA,   weight: 3  },
-];
-
 const BubbleState = {
   IDLE:      'IDLE',
   EXPLODING: 'EXPLODING',
@@ -40,14 +32,27 @@ class Bubble {
   }
 
   isInExplosionRadius(other) {
-    return Utils.distance(this.x, this.y, other.x, other.y)
-      <= this.explosionRadius + other.radius;
+    return Utils.distance(this.x, this.y, other.x, other.y) <= this.explosionRadius + other.radius;
   }
 
-  static randomType(rng) {
-    const totalWeight = BubbleDistribution.reduce((s, e) => s + e.weight, 0);
+  // Typ-Gewichte steigen mit boardIndex (Schwierigkeits-Ramp)
+  static _getDistribution(boardIndex) {
+    const t = Math.min(boardIndex, 30) / 30;
+    const lerp = (a, b) => Math.round(a + (b - a) * t);
+    return [
+      { type: BubbleType.MICRO,  weight: lerp(30, 10) },
+      { type: BubbleType.SMALL,  weight: lerp(35, 20) },
+      { type: BubbleType.MEDIUM, weight: lerp(20, 28) },
+      { type: BubbleType.LARGE,  weight: lerp(12, 28) },
+      { type: BubbleType.MEGA,   weight: lerp(3,  14) },
+    ];
+  }
+
+  static randomType(rng, boardIndex = 0) {
+    const dist = Bubble._getDistribution(boardIndex);
+    const totalWeight = dist.reduce((s, e) => s + e.weight, 0);
     let rand = rng() * totalWeight;
-    for (const entry of BubbleDistribution) {
+    for (const entry of dist) {
       rand -= entry.weight;
       if (rand <= 0) return entry.type;
     }

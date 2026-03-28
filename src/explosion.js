@@ -1,49 +1,62 @@
 // explosion.js — Chain-Reaktions-Logik
-// Kann von einer Position ODER einer Bubble aus starten.
 
 const Explosion = (() => {
 
-  let _queue = [];
-  let _timer = 0;
-  let _active = false;
-  let _score = 0;
-  let _chainLength = 0;
-  let _multiplier = 1;
-  let _hitMega = false;
+  let _queue        = [];
+  let _timer        = 0;
+  let _active       = false;
+  let _score        = 0;
+  let _chainLength  = 0;
+  let _multiplier   = 1;
+  let _hitMega      = false;
+  let _chainDivisor = 2;
 
-  // Start von einer virtuellen Position (Launcher-Bubble)
-  function startFromPosition(x, y, launchRadius, allBubbles) {
-    _queue = [];
-    _timer = 0;
-    _active = true;
-    _score = 0;
-    _chainLength = 0;
-    _multiplier = 1;
-    _hitMega = false;
+  function _triggerFeedback(typeName) {
+    if (typeof Renderer === 'undefined') return;
+    switch (typeName) {
+      case 'MEGA':
+        Renderer.triggerShake(11, 24);
+        Renderer.triggerFlash(0.55);
+        if (typeof Audio !== 'undefined') Audio.playBoom();
+        break;
+      case 'LARGE':
+        Renderer.triggerShake(5, 13);
+        Renderer.triggerFlash(0.18);
+        break;
+      case 'MEDIUM':
+        Renderer.triggerShake(2, 7);
+        break;
+    }
+  }
 
-    // Alle Bubbles im Launch-Radius direkt einreihen
+  function startFromPosition(x, y, launchRadius, allBubbles, chainDivisor = 2) {
+    _queue        = [];
+    _timer        = 0;
+    _active       = true;
+    _score        = 0;
+    _chainLength  = 0;
+    _multiplier   = 1;
+    _hitMega      = false;
+    _chainDivisor = chainDivisor;
+
     allBubbles.forEach(bubble => {
       if (bubble.state !== BubbleState.IDLE) return;
-      const dist = Utils.distance(x, y, bubble.x, bubble.y);
-      if (dist <= launchRadius + bubble.radius) {
+      if (Utils.distance(x, y, bubble.x, bubble.y) <= launchRadius + bubble.radius) {
         _enqueue(bubble, 0);
       }
     });
-
-    // Chain von diesen Bubbles aus weiter ausbreiten
     _processChain(allBubbles);
   }
 
-  // Start von einer existierenden Bubble
-  function start(tappedBubble, allBubbles) {
-    _queue = [];
-    _timer = 0;
-    _active = true;
-    _score = 0;
-    _chainLength = 0;
-    _multiplier = 1;
-    _hitMega = false;
-
+  function start(tappedBubble, allBubbles, chainDivisor = 2) {
+    _queue        = [];
+    _timer        = 0;
+    _active       = true;
+    _score        = 0;
+    _chainLength  = 0;
+    _multiplier   = 1;
+    _hitMega      = false;
+    _chainDivisor = chainDivisor;
     _enqueue(tappedBubble, 0);
     _processChain(allBubbles);
   }
@@ -59,7 +72,7 @@ const Explosion = (() => {
     const processed = new Set(toProcess);
 
     while (toProcess.length > 0) {
-      const current = toProcess.shift();
+      const current      = toProcess.shift();
       const currentEntry = _queue.find(q => q.bubble === current);
       const currentDelay = currentEntry ? currentEntry.delay : 0;
 
@@ -67,8 +80,7 @@ const Explosion = (() => {
         if (other.state === BubbleState.IDLE && current.isInExplosionRadius(other)) {
           if (!processed.has(other)) {
             processed.add(other);
-            const newDelay = currentDelay + 60 + Math.floor(Math.random() * 60);
-            _enqueue(other, newDelay);
+            _enqueue(other, currentDelay + 60 + Math.floor(Math.random() * 60));
             toProcess.push(other);
           }
         }
@@ -78,7 +90,6 @@ const Explosion = (() => {
 
   function update(dt) {
     if (!_active) return;
-
     _timer += dt;
 
     _queue.forEach(entry => {
@@ -88,18 +99,17 @@ const Explosion = (() => {
         entry.bubble.explosionProgress = 0;
 
         _chainLength++;
-        // Einfachere Multiplikatoren — alle 2 statt alle 3
-        _multiplier = Math.floor(1 + _chainLength / 2);
-        _score += entry.bubble.type.points * _multiplier;
+        _multiplier = Math.floor(1 + _chainLength / _chainDivisor);
+        _score     += entry.bubble.type.points * _multiplier;
 
         if (entry.bubble.type.name === 'MEGA') _hitMega = true;
 
-        if (typeof Particles !== 'undefined') {
+        if (typeof Particles !== 'undefined')
           Particles.emit(entry.bubble.x, entry.bubble.y, entry.bubble.type.color, 14);
-        }
-        if (typeof Audio !== 'undefined') {
+        if (typeof Audio !== 'undefined')
           Audio.playPop(_chainLength);
-        }
+
+        _triggerFeedback(entry.bubble.type.name);
       }
     });
 
@@ -108,15 +118,10 @@ const Explosion = (() => {
       entry.bubble.explosionProgress = Utils.clamp(
         entry.bubble.explosionProgress + dt / 280, 0, 1
       );
-      if (entry.bubble.explosionProgress >= 1) {
-        entry.bubble.state = BubbleState.DEAD;
-      }
+      if (entry.bubble.explosionProgress >= 1) entry.bubble.state = BubbleState.DEAD;
     });
 
-    const allTriggered = _queue.every(e => e.triggered);
-    const allDead = _queue.every(e => e.bubble.state === BubbleState.DEAD);
-
-    if (allTriggered && allDead && _queue.length > 0) {
+    if (_queue.every(e => e.triggered) && _queue.every(e => e.bubble.state === BubbleState.DEAD) && _queue.length > 0) {
       _active = false;
     }
   }
