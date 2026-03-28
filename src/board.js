@@ -23,25 +23,32 @@ const Board = (() => {
     return null;
   }
 
-  // cfg enthält Upgrade-Werte + prestigeLevel
   function generate(seed, boardIndex, canvasW, canvasH, cfg = {}) {
-    const rng            = Utils.createRNG(seed + boardIndex * 1000);
-    const bubbles        = [];
-    const count          = _getBubbleCount(boardIndex);
-    const minGap         = _getMinGap(boardIndex);
+    // ── Skalierung: nur nach UNTEN (max 1.0) ─────────────────────────────
+    // Desktop (>= 836px): scale = 1.0 → originale Werte, unverändert
+    // Mobile (< 836px):   scale < 1.0 → Bubbles und Explosionen proportional kleiner
+    // Verhindert, dass Explosion-Radien auf großen Screens zu groß werden.
+    const scale = Utils.clamp(canvasW / 836, 0.3, 1.0);
+
+    const rng          = Utils.createRNG(seed + boardIndex * 1000);
+    const bubbles      = [];
+    const count        = _getBubbleCount(boardIndex);
+    const minGap       = Math.round(_getMinGap(boardIndex) * scale);
     const reactionBoost  = cfg.reactionBoost     || 0;
     const megaBoost      = cfg.megaRadiusBoost   || 0;
     const magnetBoost    = cfg.bubbleMagnetBoost || 0;
     const prestigeLevel  = cfg.prestigeLevel     || 0;
 
     for (let i = 0; i < count; i++) {
-      const type = Bubble.randomType(rng, boardIndex, prestigeLevel);
-      const pos  = tryPlace(rng, bubbles, canvasW, canvasH, type.baseRadius, minGap);
+      const type         = Bubble.randomType(rng, boardIndex, prestigeLevel);
+      const scaledRadius = Math.round(type.baseRadius * scale);
+      const pos          = tryPlace(rng, bubbles, canvasW, canvasH, scaledRadius, minGap);
       if (!pos) continue;
 
       const b = new Bubble(pos.x, pos.y, type);
+      b.radius          = scaledRadius;
+      b.explosionRadius = Math.round(scaledRadius * type.explosionMult);
 
-      // Upgrade-Boni auf Explosionsradius
       if (reactionBoost > 0 && !type.special) {
         b.explosionRadius = Math.round(b.explosionRadius * (1 + reactionBoost));
       }
@@ -58,13 +65,11 @@ const Board = (() => {
   }
 
   // ── Tutorial Board ──────────────────────────────────────────────────────
-  // Fixer Seed, nur beim allerersten Spiel. Dichter Cluster in der Mitte —
-  // garantiert eine befriedigende erste Chain-Reaktion.
   function generateTutorial(canvasW, canvasH, cfg = {}) {
-    const SEED = 0x54757421;
-    const rng  = Utils.createRNG(SEED);
+    const scale = Utils.clamp(canvasW / 836, 0.3, 1.0);
+    const SEED  = 0x54757421;
+    const rng   = Utils.createRNG(SEED);
 
-    // Nur einfache Typen: gute Balance für garantierte Chains
     const DIST = [
       { type: BubbleType.SMALL,  weight: 25 },
       { type: BubbleType.MEDIUM, weight: 45 },
@@ -79,25 +84,25 @@ const Board = (() => {
       return BubbleType.MEDIUM;
     }
 
-    // Enger Bereich um die Mitte — 58% Breite, 62% Höhe
     const areaW  = canvasW * 0.58;
     const areaH  = canvasH * 0.62;
     const areaX  = (canvasW - areaW) / 2;
-    const areaY  = (canvasH - areaH) / 2 + canvasH * 0.04; // leicht nach unten versetzt (HUD-Platz oben)
-    const minGap = 1;   // sehr eng für sichere Chains
+    const areaY  = (canvasH - areaH) / 2 + canvasH * 0.04;
+    const minGap = Math.round(1 * scale);
     const count  = 26;
     const bubbles = [];
     const reactionBoost = cfg.reactionBoost || 0;
 
     for (let i = 0; i < count; i++) {
-      const type    = pickType();
-      const padding = type.baseRadius + 3;
-      let placed    = null;
+      const type         = pickType();
+      const scaledRadius = Math.round(type.baseRadius * scale);
+      const padding      = scaledRadius + 3;
+      let placed         = null;
 
       for (let attempt = 0; attempt < 250; attempt++) {
         const x = areaX + padding + rng() * (areaW - padding * 2);
         const y = areaY + padding + rng() * (areaH - padding * 2);
-        if (!bubbles.some(b => Utils.distance(x, y, b.x, b.y) < b.radius + type.baseRadius + minGap)) {
+        if (!bubbles.some(b => Utils.distance(x, y, b.x, b.y) < b.radius + scaledRadius + minGap)) {
           placed = { x, y };
           break;
         }
@@ -105,6 +110,8 @@ const Board = (() => {
       if (!placed) continue;
 
       const b = new Bubble(placed.x, placed.y, type);
+      b.radius          = scaledRadius;
+      b.explosionRadius = Math.round(scaledRadius * type.explosionMult);
       if (reactionBoost > 0) {
         b.explosionRadius = Math.round(b.explosionRadius * (1 + reactionBoost));
       }

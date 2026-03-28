@@ -11,7 +11,6 @@ const Game = (() => {
   const BASE_LAUNCHER_RADIUS = 80;
   const _AUTO_NEXT_DURATION  = 2500;
 
-  // ── Prestige Unlock Tabelle ────────────────────────────────────────────
   const PRESTIGE_UNLOCKS = [
     { level: 1,  id: 'gold_theme',     icon: '🎨', label: 'Gold Theme',        desc: 'Alles glänzt in Gold',                 type: 'visual'   },
     { level: 2,  id: 'void_bubble',    icon: '🌀', label: 'Void Bubble',        desc: 'Ultra-seltene Mega-Bubble (500 Punkte)',type: 'gameplay' },
@@ -40,7 +39,6 @@ const Game = (() => {
     return 'default';
   }
 
-  // ── Score-Meilensteine ────────────────────────────────────────────────
   const MILESTONES = [
     { score: 500,   stars: 2,  label: '🔥 Zündung!',     desc: '500 Punkte gesamt'    },
     { score: 2000,  stars: 3,  label: '⚡ Kettenreaktor', desc: '2.000 Punkte gesamt'  },
@@ -50,7 +48,6 @@ const Game = (() => {
     { score: 75000, stars: 20, label: '✦ GALAKTISCH',    desc: '75.000 Punkte gesamt' },
   ];
 
-  // ── Weekly Challenges ─────────────────────────────────────────────────
   const WEEKLY_RULES = [
     { id: 'sniper',    icon: '🎯', label: 'Sniper Modus', desc: 'Nur 1 Tap erlaubt',      maxTapsOverride: 1 },
     { id: 'chain_god', icon: '⛓️', label: 'Chain Gott',   desc: 'Erreiche 20+ Chain',      missionOverride: [{ label: '20+ Chain', check: r => r.maxChain >= 20 }] },
@@ -64,7 +61,6 @@ const Game = (() => {
     return { ...rule, seed: Utils.hashString('weekly:' + d.getUTCFullYear() + week) };
   }
 
-  // ── State ─────────────────────────────────────────────────────────────
   let _state = STATE.LOADING, _bubbles = [], _boardIndex = 0;
   let _totalScore = 0, _lastResult = null;
   let _isDailyBoard = false, _isWeeklyBoard = false, _weeklyRule = null;
@@ -80,25 +76,28 @@ const Game = (() => {
   let _pendingPrestigeUnlock = null, _prestigeUnlockTimer = 0;
   let _currentStreak = 0;
 
-  // Tutorial
   let _tutorialDone    = false;
   let _isTutorialBoard = false;
   let _autoNextTimer   = -1;
 
+  // ── Canvas Scale ──────────────────────────────────────────────────────
+  // Max = 1.0: Desktop bleibt auf Original-Werten (kalibriert für 836px).
+  // Nur Mobile (< 836px) wird nach unten skaliert.
+  let _scale = 1;
+
   let _launcher = { x: 0, y: 0, visible: false };
   let _canvas = null, _ctx = null, _lastTime = 0;
 
-  // ── Upgrades ──────────────────────────────────────────────────────────
   function _refreshUpgrades() {
     _prestigeLevel      = Storage.getPrestigeLevel();
     _prestigeMultiplier = 1 + _prestigeLevel * 0.25;
     if (_hardcoreMode && _prestigeLevel >= 9) {
       _cfg = Upgrades.getGameConfig(BASE_LAUNCHER_RADIUS, BASE_TAPS);
-      _cfg.launcherRadius = BASE_LAUNCHER_RADIUS;
-      _cfg.maxTaps        = BASE_TAPS;
-      _cfg.chainDivisor   = 2;
-      _cfg.reactionBoost  = 0;
-      _cfg.megaRadiusBoost = 0;
+      _cfg.launcherRadius    = BASE_LAUNCHER_RADIUS;
+      _cfg.maxTaps           = BASE_TAPS;
+      _cfg.chainDivisor      = 2;
+      _cfg.reactionBoost     = 0;
+      _cfg.megaRadiusBoost   = 0;
       _cfg.bubbleMagnetBoost = 0;
     } else {
       _cfg = Upgrades.getGameConfig(BASE_LAUNCHER_RADIUS, BASE_TAPS);
@@ -108,7 +107,6 @@ const Game = (() => {
     if (typeof Particles !== 'undefined') Particles.setAfterburnActive(_cfg.afterburnEnabled);
   }
 
-  // ── Prestige ──────────────────────────────────────────────────────────
   function _doPrestige() {
     Upgrades.CATALOG.forEach(u => Storage.remove('br_upg_' + u.id));
     const newLevel = Storage.incrementPrestige();
@@ -124,7 +122,6 @@ const Game = (() => {
     return Upgrades.CATALOG.every(u => Upgrades.getLevel(u.id) >= u.maxLevel);
   }
 
-  // ── Missionen ─────────────────────────────────────────────────────────
   function _generateMissions(boardIndex, override = null) {
     if (override) return override.map(m => ({ ...m, completed: false }));
     const difficulty = Math.min(boardIndex, 8);
@@ -199,23 +196,14 @@ const Game = (() => {
     }
   }
 
-  // ── Init ──────────────────────────────────────────────────────────────
   function init(canvas) {
     _canvas = canvas;
     _ctx    = canvas.getContext('2d');
-
-    // Erste Größe setzen
     _resizeCanvas();
-
-    // Desktop resize
     window.addEventListener('resize', _resizeCanvas);
-
-    // Mobile: visualViewport feuert bei Adressleiste erscheinen/verschwinden
-    // und bei Tastatureinblendung — zuverlässiger als window resize auf Mobile.
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', _resizeCanvas);
     }
-
     Input.onMove((nx,ny)=>{ _launcher.x=nx*_canvas.width; _launcher.y=ny*_canvas.height; _launcher.visible=true; });
     Input.onTap(_handleTap);
     _totalStars    = Storage.get(Storage.KEYS.TOTAL_STARS) || 0;
@@ -225,12 +213,6 @@ const Game = (() => {
     requestAnimationFrame(_loop);
   }
 
-  // ── Canvas Resize ─────────────────────────────────────────────────────
-  // visualViewport ist auf Mobile zuverlässiger als window.innerWidth:
-  // - Berücksichtigt die echte sichtbare Fläche (ohne Browser-Chrome)
-  // - Reagiert korrekt wenn die Adressleiste ein-/ausblendet
-  // - Gibt auf Desktop dasselbe wie window.innerWidth zurück
-  // Fallback: document.documentElement.clientWidth (ignoriert Scrollbars).
   function _resizeCanvas() {
     const vv = window.visualViewport;
     const w0 = vv ? vv.width  : document.documentElement.clientWidth;
@@ -238,23 +220,20 @@ const Game = (() => {
 
     const r = 16 / 9;
     let w, h;
-    if (w0 / h0 > r) {
-      // Landscape oder breiter Screen: Canvas füllt die Höhe
-      h = h0; w = h * r;
-    } else {
-      // Portrait oder quadratischer Screen: Canvas füllt die Breite
-      w = w0; h = w / r;
-    }
+    if (w0 / h0 > r) { h = h0; w = h * r; }
+    else              { w = w0; h = w / r; }
 
     _canvas.width  = Math.floor(w);
     _canvas.height = Math.floor(h);
     _canvas.style.width  = Math.floor(w) + 'px';
     _canvas.style.height = Math.floor(h) + 'px';
 
+    // Max 1.0: Desktop nie hochskalieren, nur Mobile runterskalieren
+    _scale = Utils.clamp(_canvas.width / 836, 0.3, 1.0);
+
     if (_state === STATE.IDLE && _canvas.width > 300) _spawnBoard();
   }
 
-  // ── State Machine ─────────────────────────────────────────────────────
   function _setState(s) {
     if (s === STATE.IDLE) _autoNextTimer = -1;
     _state = s;
@@ -265,7 +244,6 @@ const Game = (() => {
     }
   }
 
-  // ── Board Spawnen ─────────────────────────────────────────────────────
   function _spawnBoard(daily=false, weekly=false) {
     _isDailyBoard=daily; _isWeeklyBoard=weekly;
     _weeklyRule=weekly?_getWeeklyChallenge():null;
@@ -277,7 +255,6 @@ const Game = (() => {
     _missions=_generateMissions(_boardIndex, _weeklyRule?.missionOverride||null);
 
     _isTutorialBoard = (_boardIndex === 0 && !_tutorialDone && !daily && !weekly);
-
     if (_isTutorialBoard) {
       _bubbles = Board.generateTutorial(_canvas.width, _canvas.height, _cfg);
       return;
@@ -303,7 +280,6 @@ const Game = (() => {
     SDK.gameplayStart(); _state=STATE.PLAYING;
   }
 
-  // ── Shop ──────────────────────────────────────────────────────────────
   function _buyUpgrade(id) {
     const def=Upgrades.CATALOG.find(u=>u.id===id);
     if(!def) return;
@@ -314,9 +290,9 @@ const Game = (() => {
     }
   }
 
-  // ── Explosion starten ─────────────────────────────────────────────────
   function _startExplosion() {
-    let launchR=_cfg.launcherRadius;
+    // Launcher-Radius mit _scale — max 1.0, nie größer als Original
+    let launchR = (_cfg.launcherRadius || BASE_LAUNCHER_RADIUS) * _scale;
     if(_cfg.overdriveEnabled&&_overdrivePending) {
       launchR=Math.round(launchR*1.5); _overdrivePending=false;
       if(typeof Renderer!=='undefined'){Renderer.triggerFlash(.25);Renderer.triggerShake(6,10);}
@@ -347,7 +323,6 @@ const Game = (() => {
     if(typeof Renderer!=='undefined') Renderer.triggerFlash(.08);
   }
 
-  // ── Tap Handler ───────────────────────────────────────────────────────
   function _handleTap(nx, ny) {
     if(SDK.isInAd()) return;
     const cx=nx*_canvas.width, cy=ny*_canvas.height;
@@ -360,32 +335,22 @@ const Game = (() => {
       else if(hit?.startsWith('buy_')) _buyUpgrade(hit.replace('buy_',''));
       return;
     }
-
     if(_state===STATE.IDLE) {SDK.gameplayStart();_state=STATE.PLAYING;return;}
-
     if(_state===STATE.PLAYING) {
       const hit=Renderer.getHitButton(cx,cy);
       if(hit==='slow_motion') {_activateSlowMotion();return;}
       if(_tapsUsed>=_cfg.maxTaps) return;
       _tapsUsed++; _state=STATE.EXPLODING; _startExplosion(); return;
     }
-
     if(_state===STATE.EXPLODING) {
       const hit=Renderer.getHitButton(cx,cy);
       if(hit==='slow_motion') {_activateSlowMotion();return;}
     }
-
     if(_state===STATE.RESULT) {
       const hit=Renderer.getHitButton(cx,cy);
-
-      // Tutorial-Result: jeder Tap → weiter, Timer canceln
       if(_isTutorialBoard) {
-        _autoNextTimer = -1;
-        _boardIndex++;
-        _setState(STATE.IDLE);
-        return;
+        _autoNextTimer = -1; _boardIndex++; _setState(STATE.IDLE); return;
       }
-
       if(hit==='retry'&&!_retryUsed){_retryUsed=true;SDK.rewardedBreak(()=>{_retryBoard();});return;}
       if(hit==='daily'&&!Storage.hasDailyPlayedToday()){_boardIndex++;_spawnBoard(true);_state=STATE.IDLE;return;}
       if(hit==='weekly'&&!Storage.hasWeeklyPlayedThisWeek()){_spawnBoard(false,true);_state=STATE.IDLE;return;}
@@ -394,7 +359,6 @@ const Game = (() => {
     }
   }
 
-  // ── Chain abgeschlossen ───────────────────────────────────────────────
   function _onChainComplete() {
     _slowMotionActive=false;
     let score=Explosion.getScore();
@@ -434,8 +398,6 @@ const Game = (() => {
     if(_isWeeklyBoard) Storage.markWeeklyPlayedThisWeek(_totalScore);
     _updateAdaptiveDifficulty();
     _checkMilestones(_totalScore);
-
-    // Tutorial abgeschlossen
     if (_isTutorialBoard) {
       Storage.set('br_tutorial_done', true);
       _tutorialDone  = true;
@@ -443,7 +405,6 @@ const Game = (() => {
     }
   }
 
-  // ── Game Loop ─────────────────────────────────────────────────────────
   function _loop(timestamp) {
     const rawDt=Math.min(timestamp-_lastTime,50);
     _lastTime=timestamp;
@@ -460,13 +421,10 @@ const Game = (() => {
     if(_prestigeUnlockTimer>0) _prestigeUnlockTimer-=rawDt;
     if(_prestigeUnlockTimer<=0&&_prestigeUnlockTimer>-100){_pendingPrestigeUnlock=null;_prestigeUnlockTimer=-200;}
 
-    // Auto-Next nach Tutorial-Board
     if (_autoNextTimer > 0 && _state === STATE.RESULT) {
       _autoNextTimer -= rawDt;
       if (_autoNextTimer <= 0) {
-        _autoNextTimer = -1;
-        _boardIndex++;
-        _setState(STATE.IDLE);
+        _autoNextTimer = -1; _boardIndex++; _setState(STATE.IDLE);
       }
     }
 
@@ -491,7 +449,7 @@ const Game = (() => {
         missions:             _missions,
         totalStars:           _totalStars,
         launcher:             _launcher,
-        launcherRadius:       _cfg.launcherRadius||BASE_LAUNCHER_RADIUS,
+        launcherRadius:       (_cfg.launcherRadius||BASE_LAUNCHER_RADIUS) * _scale,
         retryUsed:            _retryUsed,
         dailyPlayedToday:     Storage.hasDailyPlayedToday(),
         upgradeStatus:        Upgrades.getStatus(_totalStars),
@@ -521,7 +479,6 @@ const Game = (() => {
                                 : 1 - (_autoNextTimer / _AUTO_NEXT_DURATION),
       });
     }
-
     requestAnimationFrame(_loop);
   }
 
