@@ -8,16 +8,15 @@ const Game = (() => {
     PLAYING:   'PLAYING',
     EXPLODING: 'EXPLODING',
     RESULT:    'RESULT',
-    SHOP:      'SHOP',         // ← NEU
+    SHOP:      'SHOP',
   };
 
-  // ── Basis-Konstanten (werden durch Upgrades modifiziert) ───────────────
   const BASE_TAPS            = 3;
   const BASE_LAUNCHER_RADIUS = 80;
 
   let _state        = STATE.LOADING;
   let _bubbles      = [];
-  let _boardIndex   = 0;        // = Level - 1
+  let _boardIndex   = 0;
   let _totalScore   = 0;
   let _lastResult   = null;
   let _isDailyBoard = false;
@@ -28,26 +27,32 @@ const Game = (() => {
   let _retryUsed    = false;
   let _currentSeed  = 0;
 
-  // ── Aktive Upgrade-Werte (werden in _refreshUpgrades() berechnet) ──────
-  let _launcherRadius = BASE_LAUNCHER_RADIUS;
-  let _maxTaps        = BASE_TAPS;
-  let _chainDivisor   = 2;
-  let _megaRadiusBoost = 0;
+  // ── Upgrade-Werte ──────────────────────────────────────────────────────
+  let _cfg = {};   // wird in _refreshUpgrades() befüllt
 
-  function _refreshUpgrades() {
-    const cfg        = Upgrades.getGameConfig(BASE_LAUNCHER_RADIUS, BASE_TAPS);
-    _launcherRadius  = cfg.launcherRadius;
-    _maxTaps         = cfg.maxTaps;
-    _chainDivisor    = cfg.chainDivisor;
-    _megaRadiusBoost = cfg.megaRadiusBoost;
-  }
+  // Overdrive: nach 10+ Chain ist der nächste Tap geboosted
+  let _overdrivePending = false;
 
-  // Launcher-Bubble Position
+  // Combo Keeper: letzter Multiplikator für carry-over
+  let _lastMultiplier = 1;
+
+  // Präzisions-Bonus: wurde beim aktuellen Tap direkt eine MEGA getroffen?
+  let _precisionHit = false;
+
   let _launcher = { x: 0, y: 0, visible: false };
-
   let _canvas   = null;
   let _ctx      = null;
   let _lastTime = 0;
+
+  // ── Upgrades laden ─────────────────────────────────────────────────────
+  function _refreshUpgrades() {
+    _cfg = Upgrades.getGameConfig(BASE_LAUNCHER_RADIUS, BASE_TAPS);
+
+    // Afterburn an Particles weitergeben
+    if (typeof Particles !== 'undefined') {
+      Particles.setAfterburnActive(_cfg.afterburnEnabled);
+    }
+  }
 
   // ── Mission Generator ──────────────────────────────────────────────────
   function _generateMissions(boardIndex) {
@@ -67,17 +72,14 @@ const Game = (() => {
       { id: 'multi3',    label: '×3 Multiplikator', check: (r) => r.maxMultiplier >= 3    },
       { id: 'multi5',    label: '×5 Multiplikator', check: (r) => r.maxMultiplier >= 5    },
     ];
-
     const easy   = [pool[0], pool[4], pool[10], pool[11]];
     const medium = [pool[1], pool[5], pool[8],  pool[11], pool[12]];
     const hard   = [pool[2], pool[6], pool[9],  pool[12]];
     const expert = [pool[3], pool[7]];
-
     let available = [...easy];
     if (difficulty >= 2) available = [...available, ...medium];
     if (difficulty >= 4) available = [...available, ...hard];
     if (difficulty >= 7) available = [...available, ...expert];
-
     const rng      = Utils.createRNG(Utils.hashString('missions:' + boardIndex));
     const shuffled = [...available].sort(() => rng() - 0.5);
     return shuffled.slice(0, 3).map(m => ({ ...m, completed: false }));
@@ -93,10 +95,13 @@ const Game = (() => {
     };
   }
 
+  // Star Collector Upgrade: Bonus-Sterne pro abgeschlossener Mission
   function _checkMissions() {
     const stats = _getBoardStats();
     _missions.forEach(m => { m.completed = m.check(stats); });
-    return _missions.filter(m => m.completed).length;
+    const completed = _missions.filter(m => m.completed).length;
+    // Star Collector: zusätzliche Sterne pro Mission
+    return completed + completed * (_cfg.starBonusPerMission || 0);
   }
 
   // ── Init ───────────────────────────────────────────────────────────────
@@ -105,13 +110,11 @@ const Game = (() => {
     _ctx    = canvas.getContext('2d');
     _resizeCanvas();
     window.addEventListener('resize', _resizeCanvas);
-
     Input.onMove((normX, normY) => {
       _launcher.x       = normX * _canvas.width;
       _launcher.y       = normY * _canvas.height;
       _launcher.visible = true;
     });
-
     Input.onTap(_handleTap);
     _totalStars = Storage.get(Storage.KEYS.TOTAL_STARS) || 0;
     _refreshUpgrades();
@@ -120,22 +123,15 @@ const Game = (() => {
 
   function _resizeCanvas() {
     const targetRatio = 16 / 9;
-    const winW        = window.innerWidth;
-    const winH        = window.innerHeight;
-    const winRatio    = winW / winH;
-
+    const winW = window.innerWidth, winH = window.innerHeight;
+    const winRatio = winW / winH;
     let w, h;
-    if (winRatio > targetRatio) {
-      h = winH; w = h * targetRatio;
-    } else {
-      w = winW; h = w / targetRatio;
-    }
-
+    if (winRatio > targetRatio) { h = winH; w = h * targetRatio; }
+    else                        { w = winW; h = w / targetRatio; }
     _canvas.width        = Math.floor(w);
     _canvas.height       = Math.floor(h);
     _canvas.style.width  = Math.floor(w) + 'px';
     _canvas.style.height = Math.floor(h) + 'px';
-
     if (_state === STATE.IDLE && _canvas.width > 300) _spawnBoard();
   }
 
@@ -150,9 +146,7 @@ const Game = (() => {
       case STATE.RESULT:
         SDK.gameplayStop();
         _saveResult();
-        if (_boardIndex > 0 && _boardIndex % 3 === 0) {
-          SDK.commercialBreak(() => {});
-        }
+        if (_boardIndex > 0 && _boardIndex % 3 === 0) SDK.commercialBreak(() => {});
         break;
       case STATE.SHOP:
         SDK.gameplayStop();
@@ -162,36 +156,36 @@ const Game = (() => {
 
   // ── Board Spawnen ──────────────────────────────────────────────────────
   function _spawnBoard(daily = false) {
-    _isDailyBoard = daily;
-    _tapsUsed     = 0;
-    _tapsResults  = [];
-    _totalScore   = 0;
-    _retryUsed    = false;
-    _missions     = _generateMissions(_boardIndex);
-    _refreshUpgrades();   // Upgrades vor jedem Board neu einlesen
+    _isDailyBoard     = daily;
+    _tapsUsed         = 0;
+    _tapsResults      = [];
+    _totalScore       = 0;
+    _retryUsed        = false;
+    _overdrivePending = false;
+    _lastMultiplier   = 1;
+    _missions         = _generateMissions(_boardIndex);
+    _refreshUpgrades();
 
-    const seed   = daily
-      ? Utils.getDailySeed()
-      : Utils.hashString('board:' + Date.now());
+    const seed   = daily ? Utils.getDailySeed() : Utils.hashString('board:' + Date.now());
     _currentSeed = seed;
-
-    // Mega-Radius-Boost aus Upgrade in Bubbles einfließen lassen
-    _bubbles = Board.generate(seed, _boardIndex, _canvas.width, _canvas.height, _megaRadiusBoost);
+    _bubbles     = Board.generate(seed, _boardIndex, _canvas.width, _canvas.height, _cfg);
   }
 
-  // ── Retry Board ────────────────────────────────────────────────────────
+  // ── Retry ──────────────────────────────────────────────────────────────
   function _retryBoard() {
-    _tapsUsed    = 0;
-    _tapsResults = [];
-    _totalScore  = 0;
-    _missions    = _generateMissions(_boardIndex);
+    _tapsUsed         = 0;
+    _tapsResults      = [];
+    _totalScore       = 0;
+    _overdrivePending = false;
+    _lastMultiplier   = 1;
+    _missions         = _generateMissions(_boardIndex);
     _refreshUpgrades();
-    _bubbles     = Board.generate(_currentSeed, _boardIndex, _canvas.width, _canvas.height, _megaRadiusBoost);
+    _bubbles          = Board.generate(_currentSeed, _boardIndex, _canvas.width, _canvas.height, _cfg);
     SDK.gameplayStart();
     _state = STATE.PLAYING;
   }
 
-  // ── Daily Board ────────────────────────────────────────────────────────
+  // ── Daily ──────────────────────────────────────────────────────────────
   function _startDailyBoard() {
     if (Storage.hasDailyPlayedToday()) return;
     _boardIndex = 0;
@@ -199,60 +193,87 @@ const Game = (() => {
     _state = STATE.IDLE;
   }
 
-  // ── Shop: Kauf verarbeiten ─────────────────────────────────────────────
+  // ── Shop Kauf ──────────────────────────────────────────────────────────
   function _buyUpgrade(id) {
+    const def = Upgrades.CATALOG.find(u => u.id === id);
+    if (!def) return;
     const success = Upgrades.buy(id, _totalStars);
     if (success) {
-      const cost    = Upgrades.CATALOG.find(u => u.id === id).costPerLevel;
-      _totalStars  -= cost;
+      _totalStars -= def.costPerLevel;
       Storage.set(Storage.KEYS.TOTAL_STARS, _totalStars);
       _refreshUpgrades();
     }
   }
 
+  // ── Explosion starten ──────────────────────────────────────────────────
+  function _startExplosion() {
+    // Overdrive: nach 10+ Chain → nächster Tap bekommt 1.5× Launcher-Radius
+    let launchR = _cfg.launcherRadius;
+    if (_cfg.overdriveEnabled && _overdrivePending) {
+      launchR          = Math.round(launchR * 1.5);
+      _overdrivePending = false;
+      // Visuelles Feedback
+      if (typeof Renderer !== 'undefined') {
+        Renderer.triggerFlash(0.25);
+        Renderer.triggerShake(6, 10);
+      }
+    }
+
+    // Combo Keeper: carry-over Multiplikator von letztem Tap
+    const startMultiplier = _cfg.comboKeeperEnabled && _tapsUsed > 1
+      ? Math.max(1, Math.floor(_lastMultiplier / 2))
+      : 1;
+
+    // Präzisions-Bonus: prüfen ob direkt getroffene Bubble eine MEGA ist
+    _precisionHit = false;
+    if (_cfg.precisionBonus > 0) {
+      _precisionHit = _bubbles.some(b => {
+        if (b.state !== BubbleState.IDLE) return false;
+        const dist = Utils.distance(_launcher.x, _launcher.y, b.x, b.y);
+        return dist <= launchR + b.radius && b.type.name === 'MEGA';
+      });
+    }
+
+    Explosion.startFromPosition(
+      _launcher.x, _launcher.y, launchR, _bubbles,
+      {
+        chainDivisor:     _cfg.chainDivisor,
+        infernoStep:      _cfg.chainInfernoStep,
+        highRollerFactor: _cfg.highRollerFactor,
+        startMultiplier,
+      }
+    );
+  }
+
   // ── Tap Handler ────────────────────────────────────────────────────────
   function _handleTap(normX, normY) {
     if (SDK.isInAd()) return;
-
     const canvasX = normX * _canvas.width;
     const canvasY = normY * _canvas.height;
 
-    // SHOP-State — Button-Hit-Testing
     if (_state === STATE.SHOP) {
       const hit = Renderer.getHitButton(canvasX, canvasY);
-      if (hit === 'shop_back') {
-        _boardIndex++;
-        _setState(STATE.IDLE);
-      } else if (hit && hit.startsWith('buy_')) {
-        _buyUpgrade(hit.replace('buy_', ''));
-      }
+      if (hit === 'shop_back') { _boardIndex++; _setState(STATE.IDLE); }
+      else if (hit && hit.startsWith('buy_')) _buyUpgrade(hit.replace('buy_', ''));
       return;
     }
 
-    // IDLE → PLAYING
     if (_state === STATE.IDLE) {
       SDK.gameplayStart();
       _state = STATE.PLAYING;
       return;
     }
 
-    // PLAYING → EXPLODING
     if (_state === STATE.PLAYING) {
-      if (_tapsUsed >= _maxTaps) return;
+      if (_tapsUsed >= _cfg.maxTaps) return;
       _tapsUsed++;
       _state = STATE.EXPLODING;
-      Explosion.startFromPosition(
-        _launcher.x, _launcher.y,
-        _launcherRadius, _bubbles,
-        _chainDivisor
-      );
+      _startExplosion();
       return;
     }
 
-    // RESULT → Buttons
     if (_state === STATE.RESULT) {
       const hit = Renderer.getHitButton(canvasX, canvasY);
-
       if (hit === 'retry' && !_retryUsed) {
         _retryUsed = true;
         SDK.rewardedBreak(() => { _retryBoard(); });
@@ -263,11 +284,7 @@ const Game = (() => {
         _startDailyBoard();
         return;
       }
-      if (hit === 'shop') {
-        _setState(STATE.SHOP);
-        return;
-      }
-      // 'next' oder Klick außerhalb → nächstes Board
+      if (hit === 'shop') { _setState(STATE.SHOP); return; }
       _boardIndex++;
       _setState(STATE.IDLE);
     }
@@ -275,24 +292,36 @@ const Game = (() => {
 
   // ── Chain abgeschlossen ────────────────────────────────────────────────
   function _onChainComplete() {
-    const result = {
-      score:       Explosion.getScore(),
-      chainLength: Explosion.getChainLength(),
-      multiplier:  Explosion.getMultiplier(),
-      hitMega:     Explosion.hitMega(),
-    };
+    let score       = Explosion.getScore();
+    const chainLen  = Explosion.getChainLength();
+    const mult      = Explosion.getMultiplier();
+    const mega      = Explosion.hitMega();
 
+    // Präzisions-Bonus: +50% Score dieser Chain wenn MEGA direkt getroffen
+    if (_precisionHit && _cfg.precisionBonus > 0) {
+      score = Math.round(score * (1 + _cfg.precisionBonus));
+      _precisionHit = false;
+      if (typeof Renderer !== 'undefined') Renderer.triggerFlash(0.2);
+    }
+
+    const result = { score, chainLength: chainLen, multiplier: mult, hitMega: mega };
     _tapsResults.push(result);
-    _totalScore += result.score;
-    _lastResult  = result;
+    _totalScore    += score;
+    _lastResult     = result;
+    _lastMultiplier = mult;   // für Combo Keeper
+
+    // Overdrive: 10+ Chain → nächsten Tap boosten
+    if (_cfg.overdriveEnabled && chainLen >= 10) {
+      _overdrivePending = true;
+    }
 
     const stats = _getBoardStats();
     _missions.forEach(m => { m.completed = m.check(stats); });
-    const allMissionsDone = _missions.every(m => m.completed);
-    const idleBubbles     = _bubbles.filter(b => b.state === BubbleState.IDLE);
-    const tapsLeft        = _maxTaps - _tapsUsed;
+    const allDone  = _missions.every(m => m.completed);
+    const tapsLeft = _cfg.maxTaps - _tapsUsed;
+    const idleBubs = _bubbles.filter(b => b.state === BubbleState.IDLE);
 
-    if (allMissionsDone || tapsLeft <= 0 || idleBubbles.length === 0) {
+    if (allDone || tapsLeft <= 0 || idleBubs.length === 0) {
       _setState(STATE.RESULT);
     } else {
       _state = STATE.PLAYING;
@@ -302,18 +331,14 @@ const Game = (() => {
   // ── Ergebnis speichern ─────────────────────────────────────────────────
   function _saveResult() {
     if (_tapsResults.length === 0) return;
-
     const starsEarned = _checkMissions();
     _totalStars += starsEarned;
     Storage.set(Storage.KEYS.TOTAL_STARS, _totalStars);
-
     const hs = Storage.get(Storage.KEYS.HIGH_SCORE) || 0;
     if (_totalScore > hs) Storage.set(Storage.KEYS.HIGH_SCORE, _totalScore);
-
     const bestChain = Math.max(0, ..._tapsResults.map(r => r.chainLength));
-    const bc        = Storage.get(Storage.KEYS.BEST_CHAIN) || 0;
+    const bc = Storage.get(Storage.KEYS.BEST_CHAIN) || 0;
     if (bestChain > bc) Storage.set(Storage.KEYS.BEST_CHAIN, bestChain);
-
     if (_isDailyBoard) Storage.markDailyPlayedToday(_totalScore);
   }
 
@@ -333,19 +358,21 @@ const Game = (() => {
         totalScore:       _totalScore,
         chainLength:      Explosion.getChainLength(),
         multiplier:       Explosion.getMultiplier(),
-        level:            _boardIndex + 1,          // ← NEU: Level-Anzeige
+        level:            _boardIndex + 1,
         boardIndex:       _boardIndex,
         isDailyBoard:     _isDailyBoard,
         tapsUsed:         _tapsUsed,
-        tapsMax:          _maxTaps,
+        tapsMax:          _cfg.maxTaps || BASE_TAPS,
         tapsResults:      _tapsResults,
         missions:         _missions,
         totalStars:       _totalStars,
         launcher:         _launcher,
-        launcherRadius:   _launcherRadius,
+        launcherRadius:   _cfg.launcherRadius || BASE_LAUNCHER_RADIUS,
         retryUsed:        _retryUsed,
         dailyPlayedToday: Storage.hasDailyPlayedToday(),
-        upgradeStatus:    Upgrades.getStatus(_totalStars),  // ← NEU: Shop-Daten
+        upgradeStatus:    Upgrades.getStatus(_totalStars),
+        overdrivePending: _overdrivePending,  // für Launcher-Glow
+        trailEnabled:     _cfg.trailEnabled,
       });
     }
 

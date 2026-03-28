@@ -9,7 +9,12 @@ const Explosion = (() => {
   let _chainLength  = 0;
   let _multiplier   = 1;
   let _hitMega      = false;
-  let _chainDivisor = 2;
+
+  // Upgrade-Werte die pro Explosion gesetzt werden
+  let _chainDivisor      = 2;
+  let _infernoStep       = 0;     // Chain Inferno: jede Nth Bubble doppelter Score
+  let _highRollerFactor  = 1.0;   // High Roller: Faktor ab ×5
+  let _startMultiplier   = 1;     // Combo Keeper: Startwert > 1 wenn carry-over
 
   function _triggerFeedback(typeName) {
     if (typeof Renderer === 'undefined') return;
@@ -29,16 +34,22 @@ const Explosion = (() => {
     }
   }
 
-  function startFromPosition(x, y, launchRadius, allBubbles, chainDivisor = 2) {
-    _queue        = [];
-    _timer        = 0;
-    _active       = true;
-    _score        = 0;
-    _chainLength  = 0;
-    _multiplier   = 1;
-    _hitMega      = false;
-    _chainDivisor = chainDivisor;
+  function _resetState(opts = {}) {
+    _queue             = [];
+    _timer             = 0;
+    _active            = true;
+    _score             = 0;
+    _chainLength       = 0;
+    _hitMega           = false;
+    _chainDivisor      = opts.chainDivisor      ?? 2;
+    _infernoStep       = opts.infernoStep       ?? 0;
+    _highRollerFactor  = opts.highRollerFactor  ?? 1.0;
+    _startMultiplier   = opts.startMultiplier   ?? 1;
+    _multiplier        = _startMultiplier;
+  }
 
+  function startFromPosition(x, y, launchRadius, allBubbles, opts = {}) {
+    _resetState(opts);
     allBubbles.forEach(bubble => {
       if (bubble.state !== BubbleState.IDLE) return;
       if (Utils.distance(x, y, bubble.x, bubble.y) <= launchRadius + bubble.radius) {
@@ -48,15 +59,8 @@ const Explosion = (() => {
     _processChain(allBubbles);
   }
 
-  function start(tappedBubble, allBubbles, chainDivisor = 2) {
-    _queue        = [];
-    _timer        = 0;
-    _active       = true;
-    _score        = 0;
-    _chainLength  = 0;
-    _multiplier   = 1;
-    _hitMega      = false;
-    _chainDivisor = chainDivisor;
+  function start(tappedBubble, allBubbles, opts = {}) {
+    _resetState(opts);
     _enqueue(tappedBubble, 0);
     _processChain(allBubbles);
   }
@@ -70,12 +74,10 @@ const Explosion = (() => {
   function _processChain(allBubbles) {
     const toProcess = [..._queue.map(q => q.bubble)];
     const processed = new Set(toProcess);
-
     while (toProcess.length > 0) {
       const current      = toProcess.shift();
       const currentEntry = _queue.find(q => q.bubble === current);
       const currentDelay = currentEntry ? currentEntry.delay : 0;
-
       allBubbles.forEach(other => {
         if (other.state === BubbleState.IDLE && current.isInExplosionRadius(other)) {
           if (!processed.has(other)) {
@@ -94,23 +96,49 @@ const Explosion = (() => {
 
     _queue.forEach(entry => {
       if (entry.triggered) return;
-      if (_timer >= entry.delay) {
-        entry.triggered = true;
-        entry.bubble.explosionProgress = 0;
+      if (_timer < entry.delay) return;
 
-        _chainLength++;
-        _multiplier = Math.floor(1 + _chainLength / _chainDivisor);
-        _score     += entry.bubble.type.points * _multiplier;
+      entry.triggered = true;
+      entry.bubble.explosionProgress = 0;
+      _chainLength++;
 
-        if (entry.bubble.type.name === 'MEGA') _hitMega = true;
+      // Multiplikator berechnen (Chain Boost Upgrade beeinflusst Divisor)
+      _multiplier = Math.max(
+        _startMultiplier,
+        Math.floor(1 + _chainLength / _chainDivisor)
+      );
 
-        if (typeof Particles !== 'undefined')
-          Particles.emit(entry.bubble.x, entry.bubble.y, entry.bubble.type.color, 14);
-        if (typeof Audio !== 'undefined')
-          Audio.playPop(_chainLength);
-
-        _triggerFeedback(entry.bubble.type.name);
+      // ── Chain Inferno ──────────────────────────────────────────────────
+      // Jede Nth Bubble: Score-Bonus ×2 + extra Partikel + mini Shake
+      const isInferno = _infernoStep > 0 && _chainLength > 0 && _chainLength % _infernoStep === 0;
+      let scoreMult = _multiplier;
+      if (isInferno) {
+        scoreMult *= 2;
+        if (typeof Renderer !== 'undefined') {
+          Renderer.triggerShake(4, 8);
+          Renderer.triggerFlash(0.12);
+        }
+        if (typeof Particles !== 'undefined') {
+          Particles.emit(entry.bubble.x, entry.bubble.y, '#FF6B35', 20);
+        }
       }
+
+      // ── High Roller ────────────────────────────────────────────────────
+      // Ab ×5 Multiplikator → Score-Faktor anwenden
+      if (_highRollerFactor > 1.0 && _multiplier >= 5) {
+        scoreMult = Math.round(scoreMult * _highRollerFactor);
+      }
+
+      _score += entry.bubble.type.points * scoreMult;
+
+      if (entry.bubble.type.name === 'MEGA') _hitMega = true;
+
+      if (typeof Particles !== 'undefined')
+        Particles.emit(entry.bubble.x, entry.bubble.y, entry.bubble.type.color, 14);
+      if (typeof Audio !== 'undefined')
+        Audio.playPop(_chainLength);
+
+      _triggerFeedback(entry.bubble.type.name);
     });
 
     _queue.forEach(entry => {
@@ -121,7 +149,9 @@ const Explosion = (() => {
       if (entry.bubble.explosionProgress >= 1) entry.bubble.state = BubbleState.DEAD;
     });
 
-    if (_queue.every(e => e.triggered) && _queue.every(e => e.bubble.state === BubbleState.DEAD) && _queue.length > 0) {
+    if (_queue.every(e => e.triggered) &&
+        _queue.every(e => e.bubble.state === BubbleState.DEAD) &&
+        _queue.length > 0) {
       _active = false;
     }
   }
