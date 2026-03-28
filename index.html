@@ -1,63 +1,89 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta charset="UTF-8">
+
+  <!--
+    viewport-fit=cover: iPhone Notch/Dynamic Island füllt den ganzen Screen.
+    user-scalable=no:   Verhindert Pinch-Zoom auf Mobile (Poki-Anforderung).
+    maximum-scale=1:    Doppelt abgesichert gegen automatisches Zoomen.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+
   <title>Bubble Reactor</title>
+
   <style>
-    * {
+    /* Reset — kein Browser-Margin, kein Padding */
+    *, *::before, *::after {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
 
+    /* Seite füllt exakt den Screen, kein Scroll möglich */
     html, body {
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #0D0F1A;
+      background: #000;
+    }
+
+    /* Canvas wird zentriert — flexbox zentriert auf jedem Gerät */
+    body {
       display: flex;
-      align-items: center;
       justify-content: center;
+      align-items: center;
+
+      /* touch-action none: verhindert Browser-Scroll/Zoom durch Touches */
+      touch-action: none;
+
+      /* Kein Text-Cursor, kein Text-Select auf Mobile */
+      cursor: default;
+      -webkit-user-select: none;
+      user-select: none;
+
+      /* Safe-Area für iPhone mit Notch (viewport-fit=cover) */
+      padding: env(safe-area-inset-top) env(safe-area-inset-right)
+               env(safe-area-inset-bottom) env(safe-area-inset-left);
     }
 
-    #game-container {
-      position: relative;
-      /* Wird per JS auf exakte 16:9 Größe gesetzt */
-    }
-
+    /* Canvas selbst */
     #game-canvas {
       display: block;
-      touch-action: none; /* Verhindert Browser-Scroll bei Touch */
+      touch-action: none;
+      /* Kein max-width/max-height — _resizeCanvas setzt die Größe per JS */
     }
   </style>
 </head>
 <body>
 
-  <div id="game-container">
-    <canvas id="game-canvas"></canvas>
-  </div>
+  <canvas id="game-canvas"></canvas>
 
-  <!-- Poki SDK — einziger externer Script-Tag, von Poki erlaubt -->
-  <script src="https://game-cdn.poki.com/scripts/v2/poki-sdk.js"></script>
+  <!--
+    Poki SDK — muss als erstes Script geladen werden.
+    Lokal (ohne Poki-Server) schlägt das fehl — sdk.js fängt das ab.
+  -->
+  <script src="https://game-cdn.poki.com/scripts/v2/poki-sdk.min.js"></script>
 
-  <!-- Game Module — Reihenfolge ist wichtig -->
-  <script src="src/utils.js"></script>
-  <script src="src/storage.js"></script>
-  <script src="src/sdk.js"></script>
-  <script src="src/input.js"></script>
-  <script src="src/bubble.js"></script>
-  <script src="src/board.js"></script>
-  <script src="src/explosion.js"></script>
-  <script src="src/particles.js"></script>
-  <script src="src/audio.js"></script>
-  <script src="src/ui.js"></script>
-  <script src="src/renderer.js"></script>
-  <script src="src/upgrades.js"></script>  
-  <script src="src/game.js"></script>
-  <script src="src/main.js"></script>
+  <!--
+    Ladereihenfolge ist wichtig:
+    ui.js muss VOR renderer.js stehen (Button-Registry).
+    game.js muss nach allen Modulen stehen.
+  -->
+  <script src="utils.js"></script>
+  <script src="storage.js"></script>
+  <script src="ui.js"></script>
+  <script src="bubble.js"></script>
+  <script src="board.js"></script>
+  <script src="explosion.js"></script>
+  <script src="particles.js"></script>
+  <script src="audio.js"></script>
+  <script src="input.js"></script>
+  <script src="sdk.js"></script>
+  <script src="upgrades.js"></script>
+  <script src="renderer.js"></script>
+  <script src="game.js"></script>
+  <script src="main.js"></script>
 
 </body>
 </html>

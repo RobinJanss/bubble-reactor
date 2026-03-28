@@ -9,6 +9,7 @@ const Game = (() => {
 
   const BASE_TAPS            = 3;
   const BASE_LAUNCHER_RADIUS = 80;
+  const _AUTO_NEXT_DURATION  = 2500;
 
   // ── Prestige Unlock Tabelle ────────────────────────────────────────────
   const PRESTIGE_UNLOCKS = [
@@ -27,11 +28,9 @@ const Game = (() => {
   function _getPrestigeUnlock(prestigeLevel) {
     return PRESTIGE_UNLOCKS.filter(u => u.level <= prestigeLevel).map(u => u.id);
   }
-
   function _hasUnlock(prestigeLevel, id) {
     return _getPrestigeUnlock(prestigeLevel).includes(id);
   }
-
   function _getActiveTheme(prestigeLevel) {
     if (prestigeLevel >= 10) return 'reactor_god';
     if (prestigeLevel >= 8)  return 'void';
@@ -72,31 +71,19 @@ const Game = (() => {
   let _tapsUsed = 0, _tapsResults = [], _missions = [], _totalStars = 0;
   let _retryUsed = false, _currentSeed = 0, _cfg = {};
 
-  // Prestige
   let _prestigeLevel = 0, _prestigeMultiplier = 1.0;
-
-  // Overdrive + Combo/Resonanz
   let _overdrivePending = false, _lastMultiplier = 1, _precisionHit = false;
-
-  // Adaptive Difficulty
   let _consecutiveEasyClears = 0, _difficultyBonus = 0, _adaptiveDiffLabel = '';
-
-  // Hardcore Mode (P9)
   let _hardcoreMode = false;
-
-  // Zeitlupe (P7)
-  let _slowMotionAvailable = false;
-  let _slowMotionActive    = false;
-  let _slowMotionUsed      = false;
-
-  // Milestone Toast
+  let _slowMotionAvailable = false, _slowMotionActive = false, _slowMotionUsed = false;
   let _pendingMilestone = null, _milestoneTimer = 0;
-
-  // Prestige-Unlock-Toast (wenn neues Level erreicht)
   let _pendingPrestigeUnlock = null, _prestigeUnlockTimer = 0;
-
-  // Streak
   let _currentStreak = 0;
+
+  // Tutorial
+  let _tutorialDone    = false;
+  let _isTutorialBoard = false;
+  let _autoNextTimer   = -1;
 
   let _launcher = { x: 0, y: 0, visible: false };
   let _canvas = null, _ctx = null, _lastTime = 0;
@@ -105,9 +92,7 @@ const Game = (() => {
   function _refreshUpgrades() {
     _prestigeLevel      = Storage.getPrestigeLevel();
     _prestigeMultiplier = 1 + _prestigeLevel * 0.25;
-
     if (_hardcoreMode && _prestigeLevel >= 9) {
-      // Hardcore: keine Upgrade-Effekte
       _cfg = Upgrades.getGameConfig(BASE_LAUNCHER_RADIUS, BASE_TAPS);
       _cfg.launcherRadius = BASE_LAUNCHER_RADIUS;
       _cfg.maxTaps        = BASE_TAPS;
@@ -118,33 +103,21 @@ const Game = (() => {
     } else {
       _cfg = Upgrades.getGameConfig(BASE_LAUNCHER_RADIUS, BASE_TAPS);
     }
-
-    _cfg.prestigeLevel = _prestigeLevel;
-
-    // Zeitlupe verfügbar wenn P7
+    _cfg.prestigeLevel   = _prestigeLevel;
     _slowMotionAvailable = _prestigeLevel >= 7;
-
-    if (typeof Particles !== 'undefined') {
-      Particles.setAfterburnActive(_cfg.afterburnEnabled);
-    }
+    if (typeof Particles !== 'undefined') Particles.setAfterburnActive(_cfg.afterburnEnabled);
   }
 
   // ── Prestige ──────────────────────────────────────────────────────────
   function _doPrestige() {
-    const oldLevel = Storage.getPrestigeLevel();
     Upgrades.CATALOG.forEach(u => Storage.remove('br_upg_' + u.id));
     const newLevel = Storage.incrementPrestige();
     _totalStars = 0;
     Storage.set(Storage.KEYS.TOTAL_STARS, 0);
     _hardcoreMode = false;
     _refreshUpgrades();
-
-    // Prestige-Unlock-Toast anzeigen
     const unlock = PRESTIGE_UNLOCKS.find(u => u.level === newLevel);
-    if (unlock) {
-      _pendingPrestigeUnlock = unlock;
-      _prestigeUnlockTimer   = 5000;
-    }
+    if (unlock) { _pendingPrestigeUnlock = unlock; _prestigeUnlockTimer = 5000; }
   }
 
   function _isPrestigeAvailable() {
@@ -228,29 +201,63 @@ const Game = (() => {
 
   // ── Init ──────────────────────────────────────────────────────────────
   function init(canvas) {
-    _canvas=canvas; _ctx=canvas.getContext('2d');
+    _canvas = canvas;
+    _ctx    = canvas.getContext('2d');
+
+    // Erste Größe setzen
     _resizeCanvas();
+
+    // Desktop resize
     window.addEventListener('resize', _resizeCanvas);
+
+    // Mobile: visualViewport feuert bei Adressleiste erscheinen/verschwinden
+    // und bei Tastatureinblendung — zuverlässiger als window resize auf Mobile.
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', _resizeCanvas);
+    }
+
     Input.onMove((nx,ny)=>{ _launcher.x=nx*_canvas.width; _launcher.y=ny*_canvas.height; _launcher.visible=true; });
     Input.onTap(_handleTap);
-    _totalStars=Storage.get(Storage.KEYS.TOTAL_STARS)||0;
-    _currentStreak=Storage.getStreak();
+    _totalStars    = Storage.get(Storage.KEYS.TOTAL_STARS) || 0;
+    _currentStreak = Storage.getStreak();
+    _tutorialDone  = !!Storage.get('br_tutorial_done');
     _refreshUpgrades();
     requestAnimationFrame(_loop);
   }
 
+  // ── Canvas Resize ─────────────────────────────────────────────────────
+  // visualViewport ist auf Mobile zuverlässiger als window.innerWidth:
+  // - Berücksichtigt die echte sichtbare Fläche (ohne Browser-Chrome)
+  // - Reagiert korrekt wenn die Adressleiste ein-/ausblendet
+  // - Gibt auf Desktop dasselbe wie window.innerWidth zurück
+  // Fallback: document.documentElement.clientWidth (ignoriert Scrollbars).
   function _resizeCanvas() {
-    const r=16/9, w0=window.innerWidth, h0=window.innerHeight;
-    let w,h;
-    if(w0/h0>r){h=h0;w=h*r;}else{w=w0;h=w/r;}
-    _canvas.width=Math.floor(w); _canvas.height=Math.floor(h);
-    _canvas.style.width=Math.floor(w)+'px'; _canvas.style.height=Math.floor(h)+'px';
-    if(_state===STATE.IDLE&&_canvas.width>300) _spawnBoard();
+    const vv = window.visualViewport;
+    const w0 = vv ? vv.width  : document.documentElement.clientWidth;
+    const h0 = vv ? vv.height : document.documentElement.clientHeight;
+
+    const r = 16 / 9;
+    let w, h;
+    if (w0 / h0 > r) {
+      // Landscape oder breiter Screen: Canvas füllt die Höhe
+      h = h0; w = h * r;
+    } else {
+      // Portrait oder quadratischer Screen: Canvas füllt die Breite
+      w = w0; h = w / r;
+    }
+
+    _canvas.width  = Math.floor(w);
+    _canvas.height = Math.floor(h);
+    _canvas.style.width  = Math.floor(w) + 'px';
+    _canvas.style.height = Math.floor(h) + 'px';
+
+    if (_state === STATE.IDLE && _canvas.width > 300) _spawnBoard();
   }
 
   // ── State Machine ─────────────────────────────────────────────────────
   function _setState(s) {
-    _state=s;
+    if (s === STATE.IDLE) _autoNextTimer = -1;
+    _state = s;
     switch(s){
       case STATE.IDLE:   SDK.gameplayStop(); _spawnBoard(); break;
       case STATE.RESULT: SDK.gameplayStop(); _saveResult(); if(_boardIndex>0&&_boardIndex%3===0) SDK.commercialBreak(()=>{}); break;
@@ -268,6 +275,14 @@ const Game = (() => {
     _refreshUpgrades();
     if(_weeklyRule?.maxTapsOverride) _cfg.maxTaps=_weeklyRule.maxTapsOverride;
     _missions=_generateMissions(_boardIndex, _weeklyRule?.missionOverride||null);
+
+    _isTutorialBoard = (_boardIndex === 0 && !_tutorialDone && !daily && !weekly);
+
+    if (_isTutorialBoard) {
+      _bubbles = Board.generateTutorial(_canvas.width, _canvas.height, _cfg);
+      return;
+    }
+
     let seed;
     if(daily) seed=Utils.getDailySeed();
     else if(weekly) seed=_weeklyRule.seed;
@@ -306,14 +321,11 @@ const Game = (() => {
       launchR=Math.round(launchR*1.5); _overdrivePending=false;
       if(typeof Renderer!=='undefined'){Renderer.triggerFlash(.25);Renderer.triggerShake(6,10);}
     }
-
-    // Resonanz (P4): 100% Multiplikator-Übertrag; Combo Keeper: 50%
     let startMultiplier=1;
     if(_tapsUsed>1) {
       if(_hasUnlock(_prestigeLevel,'resonance')) startMultiplier=_lastMultiplier;
       else if(_cfg.comboKeeperEnabled) startMultiplier=Math.max(1,Math.floor(_lastMultiplier/2));
     }
-
     _precisionHit=false;
     if(_cfg.precisionBonus>0) {
       _precisionHit=_bubbles.some(b=>{
@@ -321,7 +333,6 @@ const Game = (() => {
         return Utils.distance(_launcher.x,_launcher.y,b.x,b.y)<=launchR+b.radius&&b.type.name==='MEGA';
       });
     }
-
     Explosion.startFromPosition(_launcher.x,_launcher.y,launchR,_bubbles,{
       chainDivisor:     _cfg.chainDivisor,
       infernoStep:      _cfg.chainInfernoStep,
@@ -330,7 +341,6 @@ const Game = (() => {
     });
   }
 
-  // ── Zeitlupe aktivieren ───────────────────────────────────────────────
   function _activateSlowMotion() {
     if(!_slowMotionAvailable||_slowMotionUsed) return;
     _slowMotionUsed=true; _slowMotionActive=true;
@@ -354,7 +364,6 @@ const Game = (() => {
     if(_state===STATE.IDLE) {SDK.gameplayStart();_state=STATE.PLAYING;return;}
 
     if(_state===STATE.PLAYING) {
-      // Zeitlupe-Button testen
       const hit=Renderer.getHitButton(cx,cy);
       if(hit==='slow_motion') {_activateSlowMotion();return;}
       if(_tapsUsed>=_cfg.maxTaps) return;
@@ -362,13 +371,21 @@ const Game = (() => {
     }
 
     if(_state===STATE.EXPLODING) {
-      // Zeitlupe-Button auch während Explosion
       const hit=Renderer.getHitButton(cx,cy);
       if(hit==='slow_motion') {_activateSlowMotion();return;}
     }
 
     if(_state===STATE.RESULT) {
       const hit=Renderer.getHitButton(cx,cy);
+
+      // Tutorial-Result: jeder Tap → weiter, Timer canceln
+      if(_isTutorialBoard) {
+        _autoNextTimer = -1;
+        _boardIndex++;
+        _setState(STATE.IDLE);
+        return;
+      }
+
       if(hit==='retry'&&!_retryUsed){_retryUsed=true;SDK.rewardedBreak(()=>{_retryBoard();});return;}
       if(hit==='daily'&&!Storage.hasDailyPlayedToday()){_boardIndex++;_spawnBoard(true);_state=STATE.IDLE;return;}
       if(hit==='weekly'&&!Storage.hasWeeklyPlayedThisWeek()){_spawnBoard(false,true);_state=STATE.IDLE;return;}
@@ -383,7 +400,6 @@ const Game = (() => {
     let score=Explosion.getScore();
     const chainLen=Explosion.getChainLength(), mult=Explosion.getMultiplier(), mega=Explosion.hitMega();
     if(_precisionHit&&_cfg.precisionBonus>0){score=Math.round(score*(1+_cfg.precisionBonus));_precisionHit=false;if(typeof Renderer!=='undefined')Renderer.triggerFlash(.2);}
-    // Hardcore: 5× Score
     const scoreFactor=(_hardcoreMode&&_prestigeLevel>=9)?5:1;
     score=Math.round(score*_prestigeMultiplier*scoreFactor);
     const result={score,chainLength:chainLen,multiplier:mult,hitMega:mega};
@@ -418,13 +434,19 @@ const Game = (() => {
     if(_isWeeklyBoard) Storage.markWeeklyPlayedThisWeek(_totalScore);
     _updateAdaptiveDifficulty();
     _checkMilestones(_totalScore);
+
+    // Tutorial abgeschlossen
+    if (_isTutorialBoard) {
+      Storage.set('br_tutorial_done', true);
+      _tutorialDone  = true;
+      _autoNextTimer = _AUTO_NEXT_DURATION;
+    }
   }
 
   // ── Game Loop ─────────────────────────────────────────────────────────
   function _loop(timestamp) {
     const rawDt=Math.min(timestamp-_lastTime,50);
     _lastTime=timestamp;
-    // Zeitlupe: dt × 0.3 wenn aktiv
     const dt=(_slowMotionActive&&_state===STATE.EXPLODING)?rawDt*.3:rawDt;
 
     if(_state===STATE.EXPLODING) {
@@ -438,66 +460,74 @@ const Game = (() => {
     if(_prestigeUnlockTimer>0) _prestigeUnlockTimer-=rawDt;
     if(_prestigeUnlockTimer<=0&&_prestigeUnlockTimer>-100){_pendingPrestigeUnlock=null;_prestigeUnlockTimer=-200;}
 
+    // Auto-Next nach Tutorial-Board
+    if (_autoNextTimer > 0 && _state === STATE.RESULT) {
+      _autoNextTimer -= rawDt;
+      if (_autoNextTimer <= 0) {
+        _autoNextTimer = -1;
+        _boardIndex++;
+        _setState(STATE.IDLE);
+      }
+    }
+
     const weekly=_getWeeklyChallenge();
     const activeUnlocks=_getPrestigeUnlock(_prestigeLevel);
 
     if(typeof Renderer!=='undefined') {
       Renderer.draw(_ctx,_canvas,_state,_bubbles,_lastResult,{
-        totalScore:          _totalScore,
-        chainLength:         Explosion.getChainLength(),
-        multiplier:          Explosion.getMultiplier(),
-        level:               _boardIndex+1,
-        boardIndex:          _boardIndex,
-        isDailyBoard:        _isDailyBoard,
-        isWeeklyBoard:       _isWeeklyBoard,
-        weeklyLabel:         weekly.label,
-        weeklyIcon:          weekly.icon,
+        totalScore:           _totalScore,
+        chainLength:          Explosion.getChainLength(),
+        multiplier:           Explosion.getMultiplier(),
+        level:                _boardIndex+1,
+        boardIndex:           _boardIndex,
+        isDailyBoard:         _isDailyBoard,
+        isWeeklyBoard:        _isWeeklyBoard,
+        weeklyLabel:          weekly.label,
+        weeklyIcon:           weekly.icon,
         weeklyPlayedThisWeek: Storage.hasWeeklyPlayedThisWeek(),
-        tapsUsed:            _tapsUsed,
-        tapsMax:             _cfg.maxTaps||BASE_TAPS,
-        tapsResults:         _tapsResults,
-        missions:            _missions,
-        totalStars:          _totalStars,
-        launcher:            _launcher,
-        launcherRadius:      _cfg.launcherRadius||BASE_LAUNCHER_RADIUS,
-        retryUsed:           _retryUsed,
-        dailyPlayedToday:    Storage.hasDailyPlayedToday(),
-        upgradeStatus:       Upgrades.getStatus(_totalStars),
-        overdrivePending:    _overdrivePending,
-        trailEnabled:        _cfg.trailEnabled,
-
-        // Prestige
-        prestigeLevel:       _prestigeLevel,
-        prestigeAvailable:   _isPrestigeAvailable(),
-        prestigeUnlocks:     PRESTIGE_UNLOCKS,
+        tapsUsed:             _tapsUsed,
+        tapsMax:              _cfg.maxTaps||BASE_TAPS,
+        tapsResults:          _tapsResults,
+        missions:             _missions,
+        totalStars:           _totalStars,
+        launcher:             _launcher,
+        launcherRadius:       _cfg.launcherRadius||BASE_LAUNCHER_RADIUS,
+        retryUsed:            _retryUsed,
+        dailyPlayedToday:     Storage.hasDailyPlayedToday(),
+        upgradeStatus:        Upgrades.getStatus(_totalStars),
+        overdrivePending:     _overdrivePending,
+        trailEnabled:         _cfg.trailEnabled,
+        prestigeLevel:        _prestigeLevel,
+        prestigeAvailable:    _isPrestigeAvailable(),
+        prestigeUnlocks:      PRESTIGE_UNLOCKS,
         activeUnlocks,
-        activeTheme:         _getActiveTheme(_prestigeLevel),
-        hardcoreMode:        _hardcoreMode,
-        hardcoreAvailable:   _prestigeLevel>=9,
-
-        // Zeitlupe
-        slowMotionAvailable: _slowMotionAvailable,
-        slowMotionUsed:      _slowMotionUsed,
-        slowMotionActive:    _slowMotionActive,
-
-        // Meta
-        currentStreak:       _currentStreak,
-        difficultyBonus:     _difficultyBonus,
-        adaptiveDiffLabel:   _adaptiveDiffLabel,
-        pendingMilestone:    _milestoneTimer>0?_pendingMilestone:null,
+        activeTheme:          _getActiveTheme(_prestigeLevel),
+        hardcoreMode:         _hardcoreMode,
+        hardcoreAvailable:    _prestigeLevel>=9,
+        slowMotionAvailable:  _slowMotionAvailable,
+        slowMotionUsed:       _slowMotionUsed,
+        slowMotionActive:     _slowMotionActive,
+        currentStreak:        _currentStreak,
+        difficultyBonus:      _difficultyBonus,
+        adaptiveDiffLabel:    _adaptiveDiffLabel,
+        pendingMilestone:     _milestoneTimer>0?_pendingMilestone:null,
         pendingPrestigeUnlock: _prestigeUnlockTimer>0?_pendingPrestigeUnlock:null,
-        totalScoreAllTime:   Storage.getTotalScore(),
-        milestones:          MILESTONES,
-        milestonesReached:   Storage.getMilestonesReached(),
+        totalScoreAllTime:    Storage.getTotalScore(),
+        milestones:           MILESTONES,
+        milestonesReached:    Storage.getMilestonesReached(),
+        isTutorialBoard:      _isTutorialBoard,
+        autoNextProgress:     _autoNextTimer < 0
+                                ? -1
+                                : 1 - (_autoNextTimer / _AUTO_NEXT_DURATION),
       });
     }
 
     requestAnimationFrame(_loop);
   }
 
-  function getState()   {return _state;}
-  function getBubbles() {return _bubbles;}
-  function start()      {_setState(STATE.IDLE);}
+  function getState()   { return _state; }
+  function getBubbles() { return _bubbles; }
+  function start()      { _setState(STATE.IDLE); }
 
-  return {init, start, getState, getBubbles, STATE};
+  return { init, start, getState, getBubbles, STATE };
 })();

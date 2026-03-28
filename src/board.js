@@ -57,6 +57,62 @@ const Board = (() => {
     return bubbles;
   }
 
+  // ── Tutorial Board ──────────────────────────────────────────────────────
+  // Fixer Seed, nur beim allerersten Spiel. Dichter Cluster in der Mitte —
+  // garantiert eine befriedigende erste Chain-Reaktion.
+  function generateTutorial(canvasW, canvasH, cfg = {}) {
+    const SEED = 0x54757421;
+    const rng  = Utils.createRNG(SEED);
+
+    // Nur einfache Typen: gute Balance für garantierte Chains
+    const DIST = [
+      { type: BubbleType.SMALL,  weight: 25 },
+      { type: BubbleType.MEDIUM, weight: 45 },
+      { type: BubbleType.LARGE,  weight: 25 },
+      { type: BubbleType.MICRO,  weight: 5  },
+    ];
+    const totalW = DIST.reduce((s, e) => s + e.weight, 0);
+
+    function pickType() {
+      let r = rng() * totalW;
+      for (const e of DIST) { r -= e.weight; if (r <= 0) return e.type; }
+      return BubbleType.MEDIUM;
+    }
+
+    // Enger Bereich um die Mitte — 58% Breite, 62% Höhe
+    const areaW  = canvasW * 0.58;
+    const areaH  = canvasH * 0.62;
+    const areaX  = (canvasW - areaW) / 2;
+    const areaY  = (canvasH - areaH) / 2 + canvasH * 0.04; // leicht nach unten versetzt (HUD-Platz oben)
+    const minGap = 1;   // sehr eng für sichere Chains
+    const count  = 26;
+    const bubbles = [];
+    const reactionBoost = cfg.reactionBoost || 0;
+
+    for (let i = 0; i < count; i++) {
+      const type    = pickType();
+      const padding = type.baseRadius + 3;
+      let placed    = null;
+
+      for (let attempt = 0; attempt < 250; attempt++) {
+        const x = areaX + padding + rng() * (areaW - padding * 2);
+        const y = areaY + padding + rng() * (areaH - padding * 2);
+        if (!bubbles.some(b => Utils.distance(x, y, b.x, b.y) < b.radius + type.baseRadius + minGap)) {
+          placed = { x, y };
+          break;
+        }
+      }
+      if (!placed) continue;
+
+      const b = new Bubble(placed.x, placed.y, type);
+      if (reactionBoost > 0) {
+        b.explosionRadius = Math.round(b.explosionRadius * (1 + reactionBoost));
+      }
+      bubbles.push(b);
+    }
+    return bubbles;
+  }
+
   function generateDaily(canvasW, canvasH, cfg = {}) {
     return generate(Utils.getDailySeed(), 0, canvasW, canvasH, cfg);
   }
@@ -65,5 +121,5 @@ const Board = (() => {
     return generate(weekSeed, 5, canvasW, canvasH, cfg);
   }
 
-  return { generate, generateDaily, generateWeekly };
+  return { generate, generateTutorial, generateDaily, generateWeekly };
 })();
