@@ -23,31 +23,31 @@ const Board = (() => {
     return null;
   }
 
+  // cfg enthält Upgrade-Werte + prestigeLevel
   function generate(seed, boardIndex, canvasW, canvasH, cfg = {}) {
-    const rng           = Utils.createRNG(seed + boardIndex * 1000);
-    const bubbles       = [];
-    const count         = _getBubbleCount(boardIndex);
-    const minGap        = _getMinGap(boardIndex);
-    const reactionBoost = cfg.reactionBoost     || 0;
-    const megaBoost     = cfg.megaRadiusBoost   || 0;
-    const magnetBoost   = cfg.bubbleMagnetBoost || 0;
+    const rng            = Utils.createRNG(seed + boardIndex * 1000);
+    const bubbles        = [];
+    const count          = _getBubbleCount(boardIndex);
+    const minGap         = _getMinGap(boardIndex);
+    const reactionBoost  = cfg.reactionBoost     || 0;
+    const megaBoost      = cfg.megaRadiusBoost   || 0;
+    const magnetBoost    = cfg.bubbleMagnetBoost || 0;
+    const prestigeLevel  = cfg.prestigeLevel     || 0;
 
     for (let i = 0; i < count; i++) {
-      const type = Bubble.randomType(rng, boardIndex);
+      const type = Bubble.randomType(rng, boardIndex, prestigeLevel);
       const pos  = tryPlace(rng, bubbles, canvasW, canvasH, type.baseRadius, minGap);
       if (!pos) continue;
 
       const b = new Bubble(pos.x, pos.y, type);
 
-      // Kettenreaktion+ — alle normalen Bubbles
+      // Upgrade-Boni auf Explosionsradius
       if (reactionBoost > 0 && !type.special) {
         b.explosionRadius = Math.round(b.explosionRadius * (1 + reactionBoost));
       }
-      // Mega Magnet
       if (megaBoost > 0 && type.name === 'MEGA') {
         b.explosionRadius = Math.round(b.explosionRadius * (1 + megaBoost));
       }
-      // Bubble Magnet — SMALL und MICRO
       if (magnetBoost > 0 && (type.name === 'SMALL' || type.name === 'MICRO')) {
         b.explosionRadius = Math.round(b.explosionRadius * (1 + magnetBoost));
       }
@@ -57,13 +57,12 @@ const Board = (() => {
     return bubbles;
   }
 
-  function generateDaily(canvasW, canvasH) {
-    return generate(Utils.getDailySeed(), 0, canvasW, canvasH, {});
+  function generateDaily(canvasW, canvasH, cfg = {}) {
+    return generate(Utils.getDailySeed(), 0, canvasW, canvasH, cfg);
   }
 
-  // Weekly Challenge Seed basiert auf Wochennummer
-  function generateWeekly(canvasW, canvasH, weekSeed, weekLevel = 5) {
-    return generate(weekSeed, weekLevel, canvasW, canvasH, {});
+  function generateWeekly(canvasW, canvasH, weekSeed, cfg = {}) {
+    return generate(weekSeed, 5, canvasW, canvasH, cfg);
   }
 
   return { generate, generateDaily, generateWeekly };
